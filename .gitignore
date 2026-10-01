@@ -1,0 +1,10 @@
+apk/
+decoded/
+dumps/
+tools/
+out/
+db/
+*.zip
+*.jar
+*.db
+*.db-*
