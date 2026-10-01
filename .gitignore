@@ -4,6 +4,7 @@ dumps/
 tools/
 out/
 db/
+debug.keystore
 *.zip
 *.jar
 *.db

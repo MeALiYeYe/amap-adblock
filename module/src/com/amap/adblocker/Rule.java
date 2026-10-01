@@ -40,6 +40,7 @@ public class Rule {
     public static final String T_ROW = "row";
     public static final String T_RECT = "rect";
     public static final String T_SLICE = "slice";
+    public static final String T_CARD = "card";
 
     public String name = "";
     public String type = T_ID;
@@ -68,6 +69,12 @@ public class Rule {
     // slice：以 anchor 定位块，隐藏 [idx+from, idx+to] 并把后续兄弟上移补位
     public int from = 0;
     public int to = 0;
+    // slice：剩余内容顶部与参照容器的间距(px)，动态保持（容器移动时跟随）
+    public int gap = -1;
+
+    // card：隐藏 anchor 行及其后 hideNext 个兄弟，行下方内容上移补位，并收缩 cardLevels 层祖先高度
+    public int hideNext = 0;
+    public int cardLevels = 0;
 
     private Pattern pattern;
     private String[] inList;
@@ -197,7 +204,7 @@ public class Rule {
         r.right = o.optInt("right", Integer.MAX_VALUE);
         r.bottom = o.optInt("bottom", Integer.MAX_VALUE);
 
-        if (T_ROW.equals(r.type) || T_SLICE.equals(r.type)) {
+        if (T_ROW.equals(r.type) || T_SLICE.equals(r.type) || T_CARD.equals(r.type)) {
             r.anchor = o.optString("anchor", "");
             r.climb = o.optInt("climb", 2);
             r.minChildren = o.optInt("minChildren", 2);
@@ -209,6 +216,11 @@ public class Rule {
         if (T_SLICE.equals(r.type)) {
             r.from = o.optInt("from", 0);
             r.to = o.optInt("to", 0);
+            r.gap = o.optInt("gap", -1);
+        }
+        if ("card".equals(r.type)) {
+            r.hideNext = o.optInt("hideNext", 0);
+            r.cardLevels = o.optInt("cardLevels", 0);
         }
         r.compile();
         return r;

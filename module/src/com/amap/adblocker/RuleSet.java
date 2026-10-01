@@ -77,7 +77,7 @@ public class RuleSet {
             "  \"verbose\": false,\n" +
             "  \"rules\": [\n" +
             "\n" +
-            "    {\"name\":\"首页-搜索栏下方快捷图标整块移除\",\"type\":\"slice\",\"anchor\":\"驾车,公交地铁,租车,火车票机票\",\"parentClass\":\"AjxAbsoluteLayout\",\"ancestor\":\"QSScrollContainerV2\",\"from\":0,\"to\":6},\n" +
+            "    {\"name\":\"首页-搜索栏下方快捷图标整块移除\",\"type\":\"slice\",\"anchor\":\"驾车,公交地铁,租车,火车票机票\",\"parentClass\":\"AjxAbsoluteLayout\",\"ancestor\":\"QSScrollContainerV2\",\"from\":0,\"to\":6,\"gap\":100},\n" +
             "\n" +
             "    {\"name\":\"首页-回家行以下全部隐藏\",\"type\":\"class\",\"value\":\"AjxAbsoluteLayout\",\"match\":\"contains\",\"parentCls\":\"AjxList2\",\"ancestor\":\"QSScrollContainerV2\",\"minIndex\":9,\"action\":\"gone\"},\n" +
             "\n" +
@@ -86,6 +86,7 @@ public class RuleSet {
             "    {\"name\":\"我的-钱包卡券\",\"type\":\"text\",\"value\":\"钱包卡券\",\"match\":\"contains\",\"up\":1,\"ancestor\":\"MapInteractiveRelativeLayout\"},\n" +
             "    {\"name\":\"我的-借钱\",\"type\":\"text\",\"value\":\"借钱\",\"match\":\"contains\",\"up\":1,\"ancestor\":\"MapInteractiveRelativeLayout\"},\n" +
             "    {\"name\":\"我的-达人任务及以下\",\"type\":\"class\",\"value\":\"AjxAbsoluteLayout\",\"match\":\"contains\",\"parentCls\":\"AjxList2\",\"ancestor\":\"MapInteractiveRelativeLayout\",\"minIndex\":6,\"action\":\"gone\"},\n" +
+            "    {\"name\":\"我的-订单收藏待评价栏移除\",\"type\":\"card\",\"anchor\":\"订单\",\"climb\":4,\"hideNext\":1,\"cardLevels\":4,\"ancestor\":\"MapInteractiveRelativeLayout\"},\n" +
             "    {\"name\":\"我的-开启通知权限弹窗\",\"type\":\"text\",\"value\":\"开启通知权限\",\"match\":\"contains\",\"up\":2,\"ancestor\":\"MapInteractiveRelativeLayout\"},\n" +
             "\n" +
             "    {\"name\":\"地图-扫街榜2026浮标\",\"type\":\"rect\",\"value\":\"AJXTemplateContainer\",\"left\":980,\"top\":440,\"right\":1280,\"bottom\":780},\n" +

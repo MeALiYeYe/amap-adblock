@@ -13,6 +13,7 @@ import android.os.Looper;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
+import android.view.ViewTreeObserver;
 import android.widget.TextView;
 
 import java.lang.reflect.Field;
@@ -230,6 +231,10 @@ public class MainHook implements IXposedHookLoadPackage {
                 handleSlice(r, v, text != null ? text : desc);
                 continue;
             }
+            if (Rule.T_CARD.equals(r.type)) {
+                handleCard(r, v, text != null ? text : desc);
+                continue;
+            }
             if (Rule.T_RECT.equals(r.type)) {
                 scheduleRect(r, v, idn, cls, text);
                 continue;
@@ -259,7 +264,7 @@ public class MainHook implements IXposedHookLoadPackage {
         String tree = null;
         for (int i = 0; i < rules.rules.size(); i++) {
             Rule r = rules.rules.get(i);
-            if (Rule.T_ROW.equals(r.type) || Rule.T_SLICE.equals(r.type)) continue;
+            if (Rule.T_ROW.equals(r.type) || Rule.T_SLICE.equals(r.type) || Rule.T_CARD.equals(r.type)) continue;
             if (!r.interesting(v)) continue;
             if (Rule.T_TREE.equals(r.type)) {
                 if (tree == null) tree = ViewUtil.treeText(v);
@@ -355,7 +360,7 @@ public class MainHook implements IXposedHookLoadPackage {
 
     /**
      * 整段切除：以 anchor 文本/描述定位到一个块，把它所在列表里 [idx+from, idx+to] 的兄弟
-     * 全部隐藏，并把后续兄弟整体上移补位，消除空洞。
+     * 全部隐藏，并把首个剩余兄弟动态钉在参照容器顶部 + gap 处（容器移动时每帧跟随）。
      */
     static void handleSlice(final Rule r, final View v, String text) {
         if (r.anchor == null || r.anchor.length() == 0) return;
@@ -379,7 +384,7 @@ public class MainHook implements IXposedHookLoadPackage {
         final ViewGroup list = (ViewGroup) pp;
         final int idx = list.indexOfChild(block);
         if (idx < 0) return;
-        if (!markApplied(list, "slice-" + r.name)) return;
+        if (!markApplied(list, "slice-sched-" + r.name)) return;
 
         list.postDelayed(new Runnable() {
             public void run() {
@@ -395,6 +400,7 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     static void doSlice(Rule r, ViewGroup list, int idx) {
+        if (slicePins.containsKey(list)) return; // 已处理
         int n = list.getChildCount();
         int from = idx + r.from;
         int to = idx + r.to;
@@ -402,55 +408,161 @@ public class MainHook implements IXposedHookLoadPackage {
         if (to >= n) to = n - 1;
         if (from > to) return;
 
-        // 先量出要抹掉的垂直跨度，再隐藏，最后把下方内容上移
-        View first = null;
         for (int i = from; i <= to; i++) {
             View c = list.getChildAt(i);
-            if (c != null && c.getVisibility() != View.GONE && c.getHeight() > 0) {
-                first = c;
-                break;
-            }
+            if (c != null) ViewUtil.setGone(c);
         }
-        if (first == null) {
-            // 已经隐藏过了，只做上移补位
+        setupPin(r, list, to);
+    }
+
+    // ---------------- slice 动态钉扎 ----------------
+
+    private static final Map<View, Object[]> slicePins = new WeakHashMap<View, Object[]>();
+
+    /** 把 list 中 to 之后所有可见兄弟整体钉在参照容器顶部 + gap 处，每帧跟随容器位置 */
+    static void setupPin(final Rule r, final ViewGroup list, int to) {
+        synchronized (slicePins) {
+            if (slicePins.containsKey(list)) return;
         }
-        View after = null;
+        View ref = ViewUtil.findAncestor(list, r.ancestor);
+        if (ref == null) ref = list;
+        final ArrayList<View> items = new ArrayList<View>();
+        int n = list.getChildCount();
         for (int i = to + 1; i < n; i++) {
             View c = list.getChildAt(i);
-            if (c != null && c.getVisibility() != View.GONE && c.getHeight() > 0) {
-                after = c;
+            if (c != null && c.getVisibility() != View.GONE) items.add(c);
+        }
+        if (items.isEmpty()) return;
+        final View refV = ref;
+        final int[] lastTy = new int[]{Integer.MIN_VALUE};
+        final ViewTreeObserver.OnPreDrawListener[] pl = new ViewTreeObserver.OnPreDrawListener[1];
+        final View.OnAttachStateChangeListener[] asl = new View.OnAttachStateChangeListener[1];
+
+        pl[0] = new ViewTreeObserver.OnPreDrawListener() {
+            public boolean onPreDraw() {
+                try {
+                    if (!list.isAttachedToWindow() || !list.isShown()) return true;
+                    int[] rc = new int[2];
+                    refV.getLocationOnScreen(rc);
+                    int desired = rc[1] + r.gap;
+                    View first = items.get(0);
+                    int[] lc = new int[2];
+                    first.getLocationOnScreen(lc);
+                    int ny = lc[1] - (int) first.getTranslationY();
+                    int ty = desired - ny;
+                    if (ty != lastTy[0]) {
+                        lastTy[0] = ty;
+                        for (int i = 0; i < items.size(); i++) {
+                            items.get(i).setTranslationY(ty);
+                        }
+                    }
+                } catch (Throwable t) {
+                }
+                return true;
+            }
+        };
+        asl[0] = new View.OnAttachStateChangeListener() {
+            public void onViewAttachedToWindow(View vv) {
+                vv.getViewTreeObserver().addOnPreDrawListener(pl[0]);
+            }
+
+            public void onViewDetachedFromWindow(View vv) {
+                try {
+                    vv.getViewTreeObserver().removeOnPreDrawListener(pl[0]);
+                } catch (Throwable t) {
+                }
+            }
+        };
+        synchronized (slicePins) {
+            slicePins.put(list, new Object[]{items, refV, lastTy});
+        }
+        list.addOnAttachStateChangeListener(asl[0]);
+        if (list.isAttachedToWindow()) {
+            list.getViewTreeObserver().addOnPreDrawListener(pl[0]);
+        }
+        if (rules.debug) {
+            XLog.i("SLICE[" + r.name + "] pinned " + items.size() + " items gap=" + r.gap);
+        }
+    }
+
+    /**
+     * 卡片行移除：隐藏 anchor 所在行及其后 hideNext 个兄弟（如分隔线），
+     * 其下兄弟上移补位，并收缩向上 cardLevels 层祖先的高度。
+     */
+    static void handleCard(final Rule r, final View v, String text) {
+        if (r.anchor == null || r.anchor.length() == 0) return;
+        String t = text != null ? text : ViewUtil.descOf(v);
+        if (t == null) return;
+        String[] anchors = r.anchor.split("[,，]");
+        boolean hit = false;
+        for (int i = 0; i < anchors.length; i++) {
+            String a = anchors[i].trim();
+            if (a.length() > 0 && t.contains(a)) {
+                hit = true;
                 break;
             }
         }
+        if (!hit) return;
+        if (!r.hasAncestor(v)) return;
 
-        int dy = 0;
-        if (first != null && after != null) {
-            int[] a = new int[2];
-            int[] b = new int[2];
-            first.getLocationOnScreen(a);
-            after.getLocationOnScreen(b);
-            dy = b[1] - a[1];
+        View row = ViewUtil.climb(v, r.climb, r.parentClass);
+        ViewParent pp = row.getParent();
+        if (!(pp instanceof ViewGroup)) return;
+        final ViewGroup box = (ViewGroup) pp;
+        final int idx = box.indexOfChild(row);
+        if (idx < 0) return;
+        if (!markApplied(box, "card-sched-" + r.name)) return;
+
+        box.postDelayed(new Runnable() {
+            public void run() {
+                doCard(r, box, idx);
+            }
+        }, 800);
+        box.postDelayed(new Runnable() {
+            public void run() {
+                doCard(r, box, idx);
+            }
+        }, 2500);
+    }
+
+    static void doCard(Rule r, ViewGroup box, int idx) {
+        if (!markApplied(box, "card-done-" + r.name)) return;
+        int n = box.getChildCount();
+        int hideTo = Math.min(idx + r.hideNext, n - 1);
+        int removed = 0;
+        for (int i = idx; i <= hideTo; i++) {
+            View c = box.getChildAt(i);
+            if (c == null || c.getVisibility() == View.GONE) continue;
+            removed += c.getHeight();
+            ViewUtil.setGone(c);
         }
+        if (removed <= 0) return;
 
-        int hidden = 0;
-        for (int i = from; i <= to; i++) {
-            View c = list.getChildAt(i);
+        for (int i = hideTo + 1; i < n; i++) {
+            View c = box.getChildAt(i);
             if (c == null) continue;
-            if (c.getVisibility() != View.GONE) {
-                hidden++;
-                ViewUtil.setGone(c);
-            }
+            c.setTranslationY(c.getTranslationY() - removed);
         }
 
-        if (dy > 0 && hidden > 0) {
-            for (int i = to + 1; i < n; i++) {
-                View c = list.getChildAt(i);
-                if (c == null) continue;
-                c.setTranslationY(c.getTranslationY() - dy);
+        // 收缩向上 cardLevels 层祖先（含卡片根）的高度
+        View cur = box.getChildAt(hideTo + 1);
+        View start = cur != null ? cur : box;
+        View walk = start;
+        for (int i = 0; i < r.cardLevels; i++) {
+            ViewParent pp = walk.getParent();
+            if (!(pp instanceof View)) break;
+            walk = (View) pp;
+            try {
+                ViewGroup.LayoutParams lp = walk.getLayoutParams();
+                if (lp != null && walk.getHeight() > removed) {
+                    lp.height = walk.getHeight() - removed;
+                    walk.setLayoutParams(lp);
+                }
+            } catch (Throwable t) {
             }
-            if (rules.debug) {
-                XLog.i("SLICE[" + r.name + "] hid " + hidden + " items idx " + from + ".." + to + " shift=-" + dy);
-            }
+        }
+        if (rules.debug) {
+            XLog.i("CARD[" + r.name + "] removed=" + removed);
         }
     }
 

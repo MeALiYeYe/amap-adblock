@@ -188,6 +188,19 @@ public class ViewUtil {
         }
     }
 
+    /** 向上查找第一个类名包含 cls 的祖先，找不到返回 null */
+    public static View findAncestor(View v, String cls) {
+        if (cls == null || cls.length() == 0) return null;
+        ViewParent p = v.getParent();
+        int guard = 0;
+        String a = cls.toLowerCase();
+        while (p instanceof View && guard++ < 40) {
+            if (((View) p).getClass().getName().toLowerCase().contains(a)) return (View) p;
+            p = ((View) p).getParent();
+        }
+        return null;
+    }
+
     /** 向上爬 n 层；若指定 parentClass 则在到达该类名的祖先时停止 */
     public static View climb(View v, int n, String parentClass) {
         View cur = v;
