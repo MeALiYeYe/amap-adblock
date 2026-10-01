@@ -10,6 +10,7 @@ import java.io.File;
 import java.io.File;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
@@ -19,6 +20,7 @@ import android.widget.TextView;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -51,6 +53,7 @@ public class MainHook implements IXposedHookLoadPackage {
         XLog.i("loaded into " + lpparam.processName + " rules=" + rules.rules.size() + " src=" + RuleSet.lastSource);
 
         hookAjxLabelSetters(lpparam.classLoader);
+        hookTouchBlocker();
 
         try {
             XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
@@ -145,7 +148,31 @@ public class MainHook implements IXposedHookLoadPackage {
                         if (param.args[0] == null) return;
                         if (((Integer) param.args[0]).intValue() != View.VISIBLE) return;
                         View view = (View) v;
-                        if (matchesAny(view)) param.args[0] = Integer.valueOf(View.GONE);
+                        if (matchesAny(view)) {
+                            param.args[0] = Integer.valueOf(View.GONE);
+                            try {
+                                if (view.getWidth() > 0 && view.getHeight() > 0) {
+                                    View node = (view.getParent() instanceof View) ? (View) view.getParent() : null;
+                                    int depth = 0;
+                                    while (node instanceof ViewGroup && depth < 6) {
+                                        String cn = node.getClass().getName();
+                                        if (cn.startsWith("android.") || cn.startsWith("com.android.")) break;
+                                        if ((float) node.getWidth() * node.getHeight() > 0.85f
+                                                * node.getResources().getDisplayMetrics().widthPixels
+                                                * node.getResources().getDisplayMetrics().heightPixels) {
+                                            break;
+                                        }
+                                        synchronized (blockHosts) {
+                                            blockHosts.add(node);
+                                        }
+                                        node = (node.getParent() instanceof View) ? (View) node.getParent() : null;
+                                        depth++;
+                                    }
+                                    hasBlocks = true;
+                                }
+                            } catch (Throwable t) {
+                            }
+                        }
                     } catch (Throwable t) {
                     }
                 }
@@ -306,7 +333,7 @@ public class MainHook implements IXposedHookLoadPackage {
         if ("remove".equals(r.action)) ViewUtil.remove(target);
         else if ("collapse".equals(r.action)) ViewUtil.collapse(target);
         else if ("click".equals(r.action)) ViewUtil.click(target);
-        else ViewUtil.setGone(target);
+        else hideView(target);
     }
 
     /** 容器过滤：命中 anchor 后，容器里只保留 keep 列出的条目 */
@@ -348,7 +375,7 @@ public class MainHook implements IXposedHookLoadPackage {
             if (!keep) {
                 hidden++;
                 if (rules.debug) XLog.i("ROW[" + r.name + "] hide child \"" + t + "\"");
-                ViewUtil.setGone(child);
+                hideView(child);
                 if (r.pack) ViewUtil.packRow(child);
             }
         }
@@ -410,7 +437,7 @@ public class MainHook implements IXposedHookLoadPackage {
 
         for (int i = from; i <= to; i++) {
             View c = list.getChildAt(i);
-            if (c != null) ViewUtil.setGone(c);
+            if (c != null) hideView(c);
         }
         setupPin(r, list, to);
     }
@@ -534,7 +561,7 @@ public class MainHook implements IXposedHookLoadPackage {
             View c = box.getChildAt(i);
             if (c == null || c.getVisibility() == View.GONE) continue;
             removed += c.getHeight();
-            ViewUtil.setGone(c);
+            hideView(c);
         }
         if (removed <= 0) return;
 
@@ -576,6 +603,146 @@ public class MainHook implements IXposedHookLoadPackage {
             return s.add(ruleName);
         }
     }
+
+    // ---------------- 已清除区域点击屏蔽 ----------------
+    // 隐藏条目后，高德 AJX 容器仍会按内部布局数据把空白区域的点击路由给被删条目。
+    // 判定：点按落在登记过的"空白宿主" bounds 内、且宿主子树中无任何可见视图覆盖该点
+    // （即真空白区域）时，吞掉这次点按；拖动/滚动与一切可见内容（回家行/底栏/地图）放行。
+
+    static volatile boolean hasBlocks = false;
+    static final Set<View> blockHosts = Collections.newSetFromMap(new WeakHashMap<View, Boolean>());
+    static final Map<View, boolean[]> gest = new WeakHashMap<View, boolean[]>(); // [blocked, moved]
+
+    /** 隐藏 view 并把其父容器及最多 3 层 AJX 祖先登记为"空白宿主"（须在 setGone 之前调用） */
+    static void hideView(View v) {
+        if (v == null) return;
+        try {
+            if (v.getWidth() > 0 && v.getHeight() > 0) {
+                View node = (v.getParent() instanceof View) ? (View) v.getParent() : null;
+                int depth = 0;
+                while (node instanceof ViewGroup && depth < 6) {
+                    String cn = node.getClass().getName();
+                    if (cn.startsWith("android.") || cn.startsWith("com.android.")) break;
+                    // 跳过接近全屏的祖先（往往同时包含地图/底栏，避免误伤正常点击）
+                    if ((float) node.getWidth() * node.getHeight() > 0.85f
+                            * node.getResources().getDisplayMetrics().widthPixels
+                            * node.getResources().getDisplayMetrics().heightPixels) {
+                        break;
+                    }
+                    synchronized (blockHosts) {
+                        blockHosts.add(node);
+                    }
+                    node = (node.getParent() instanceof View) ? (View) node.getParent() : null;
+                    depth++;
+                }
+                hasBlocks = true;
+            }
+        } catch (Throwable t) {
+        }
+        ViewUtil.setGone(v);
+    }
+
+    /** 该点是否落在空白宿主的"无可见内容覆盖"区域 */
+    static boolean isBlockedPoint(View host, MotionEvent ev) {
+        try {
+            int[] hs = new int[2];
+            host.getLocationOnScreen(hs);
+            float sx = ev.getRawX();
+            float sy = ev.getRawY();
+            if (!(sx >= hs[0] && sx < hs[0] + host.getWidth() && sy >= hs[1] && sy < hs[1] + host.getHeight())) {
+                return false;
+            }
+            return !covered(host, sx, sy, hs[0], hs[1]);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** (sx,sy) 是否被 node 子树中的可见视图覆盖（已计入 translation/scroll）。
+     *  只有"叶子 / 有背景 / 可点击"的视图才算覆盖——透明的布局包装容器不算，
+     *  否则空白区域永远被误判为有内容。 */
+    static boolean covered(View node, float sx, float sy, float ox, float oy) {
+        if (node.getVisibility() != View.VISIBLE) return false;
+        if (node.getWidth() <= 0 || node.getHeight() <= 0) return false;
+        if (node.getAlpha() < 0.05f) return false;
+        boolean inside = sx >= ox && sx < ox + node.getWidth() && sy >= oy && sy < oy + node.getHeight();
+        if (inside) {
+            if (!(node instanceof ViewGroup) || ((ViewGroup) node).getChildCount() == 0) return true;
+            if (node.getBackground() != null) return true;
+            if (node.isClickable() || node.isLongClickable()) return true;
+        }
+        if (node instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) node;
+            for (int i = g.getChildCount() - 1; i >= 0; i--) {
+                View c = g.getChildAt(i);
+                if (c == null) continue;
+                if (covered(c, sx, sy,
+                        ox + c.getLeft() - g.getScrollX() + c.getTranslationX(),
+                        oy + c.getTop() - g.getScrollY() + c.getTranslationY())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static void hookTouchBlocker() {
+        try {
+            XposedHelpers.findAndHookMethod(ViewGroup.class, "dispatchTouchEvent", MotionEvent.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                            if (!hasBlocks) return;
+                            ViewGroup host = (ViewGroup) param.thisObject;
+                            boolean[] st;
+                            synchronized (gest) {
+                                st = gest.get(host);
+                            }
+                            if (st == null) {
+                                synchronized (blockHosts) {
+                                    if (!blockHosts.contains(host)) return;
+                                }
+                                st = new boolean[2];
+                                synchronized (gest) {
+                                    gest.put(host, st);
+                                }
+                            }
+                            MotionEvent ev = (MotionEvent) param.args[0];
+                            if (ev == null) return;
+                            final int act = ev.getActionMasked();
+                            if (act == MotionEvent.ACTION_DOWN) {
+                                st[0] = isBlockedPoint(host, ev);
+                                st[1] = false;
+                                if (st[0]) {
+                                    // 该容器（如 AJX PullToRefreshList）在 DOWN 阶段就会把点击
+                                    // 路由给被删条目，必须整个手势直接拦截
+                                    param.setResult(Boolean.TRUE);
+                                    if (rules.debug) {
+                                        XLog.i("BLOCK tap in cleared zone on " + host.getClass().getName());
+                                    }
+                                }
+                            } else if (act == MotionEvent.ACTION_POINTER_DOWN) {
+                                st[1] = true;
+                            } else if (act == MotionEvent.ACTION_MOVE) {
+                                if (st[0]) st[1] = true;
+                            } else if (act == MotionEvent.ACTION_UP || act == MotionEvent.ACTION_CANCEL) {
+                                boolean consume = st[0];
+                                st[0] = false;
+                                if (consume) {
+                                    param.setResult(Boolean.TRUE);
+                                    try {
+                                        host.setPressed(false);
+                                    } catch (Throwable t) {
+                                    }
+                                }
+                            }
+                        }
+                    });
+        } catch (Throwable t) {
+            XLog.e("hook dispatchTouchEvent: " + t);
+        }
+    }
+
 
     // ---------------- 调试命令 ----------------
 
